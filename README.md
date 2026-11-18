@@ -608,6 +608,16 @@ Tests run against a throwaway database, so they never touch your dev data.
 
 ## Deployment
 
+### Frontend → Vercel
+
+The project includes [`vercel.json`](vercel.json) ready for zero-configuration deployment on Vercel:
+
+1. Import your repository into [Vercel](https://vercel.com).
+2. Keep the **Root Directory** as `./`.
+3. Vercel will automatically read `vercel.json` (builds `web/dist`, configures SPA rewrites and PWA cache headers).
+4. Add any environment variables (e.g. `VITE_DEMO_MODE=true` or `VITE_API_URL=...`) if needed.
+5. Click **Deploy**.
+
 ### Frontend → Firebase Hosting
 
 ```bash

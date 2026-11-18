@@ -1,0 +1,5 @@
+.git
+.firebase
+*.log
+coverage
+server/.pgdata
