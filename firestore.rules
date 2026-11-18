@@ -1,0 +1,92 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Role is stored in the user's Firestore profile. Reading it requires a
+    // Firestore get(), which counts against your read quota but is the only
+    // way to enforce roles without custom claims.
+    function userRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && userRole() == 'admin';
+    }
+
+    function isDriverOrAdmin() {
+      return isSignedIn() && (userRole() == 'driver' || userRole() == 'admin');
+    }
+
+    // ── Routes & Stops — public catalogue ───────────────────────────────────
+    match /routes/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /stops/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ── User Profiles ────────────────────────────────────────────────────────
+    // Users can read/write their own profile; admins can read/write anyone's.
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if isOwner(userId) || isAdmin();
+    }
+
+    // ── Trips & Driver Check-ins ─────────────────────────────────────────────
+    match /trips/{docId} {
+      allow read: if true;                   // commuters see active trips
+      allow create: if isDriverOrAdmin();
+      allow update: if isDriverOrAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /checkins/{docId} {
+      allow read: if true;                   // commuters see occupancy/position
+      allow create: if isDriverOrAdmin();
+      allow update: if isDriverOrAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── Issues / Reports ─────────────────────────────────────────────────────
+    match /issues/{docId} {
+      allow read: if isSignedIn();           // own reports visible to user
+      allow create: if isSignedIn();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // ── Favourites & Alerts ──────────────────────────────────────────────────
+    match /favourites/{docId} {
+      allow read, write: if isSignedIn() && (
+        resource == null ||
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    match /alerts/{docId} {
+      allow read, write: if isSignedIn() && (
+        resource == null ||
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    // ── Default: deny everything not explicitly matched ───────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
