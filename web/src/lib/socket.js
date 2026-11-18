@@ -9,12 +9,22 @@
  * but not room membership, so without this a bus would appear frozen after a
  * tunnel — exactly the failure the freshness indicator would then have to
  * explain.
+ *
+ * Static-host mode: when VITE_API_URL is not set the app is deployed on a
+ * static host (Vercel / Firebase Hosting) with no Express backend.  All
+ * socket calls become no-ops so the browser console stays clean.
  */
 import { io } from 'socket.io-client';
 import { SOCKET_EVENTS } from '@sptos/shared';
 import { getToken } from './api.js';
 
-const URL = import.meta.env?.VITE_API_URL || undefined;
+const SOCKET_URL = import.meta.env?.VITE_API_URL || undefined;
+
+/**
+ * When no backend URL is configured the socket is disabled entirely.
+ * Live updates are unavailable but the REST+Firestore path still works.
+ */
+const SOCKET_DISABLED = !import.meta.env?.VITE_API_URL;
 
 const SUBSCRIBE = {
   route: SOCKET_EVENTS.SUBSCRIBE_ROUTE,
@@ -41,9 +51,10 @@ function notifyStatus() {
 }
 
 export function getSocket() {
+  if (SOCKET_DISABLED) return null;
   if (socket) return socket;
 
-  socket = io(URL, {
+  socket = io(SOCKET_URL, {
     auth: { token: getToken() },
     transports: ['websocket', 'polling'],
     reconnectionDelay: 800,
@@ -82,9 +93,10 @@ function dispatch(key, payload) {
  * REST round trip.
  */
 export function subscribe(kind, id, handler) {
-  if (!id) return () => {};
+  if (!id || SOCKET_DISABLED) return () => {};
   const key = roomKey(kind, id);
   const live = getSocket();
+  if (!live) return () => {};
 
   if (!rooms.has(key)) {
     rooms.set(key, new Set());
@@ -107,18 +119,23 @@ export function subscribe(kind, id, handler) {
 
 /** Private per-user and admin channels: arrival alerts and network activity. */
 export function on(event, handler) {
+  if (SOCKET_DISABLED) return () => {};
   const live = getSocket();
+  if (!live) return () => {};
   live.on(event, handler);
   return () => live.off(event, handler);
 }
 
 export function subscribeAdmin() {
-  getSocket().emit(SOCKET_EVENTS.SUBSCRIBE_ADMIN, () => {});
+  if (SOCKET_DISABLED) return;
+  const live = getSocket();
+  if (live) live.emit(SOCKET_EVENTS.SUBSCRIBE_ADMIN, () => {});
 }
 
 export function onConnectionChange(handler) {
   statusHandlers.add(handler);
-  handler(Boolean(socket?.connected));
+  // On static-only deployments there is no socket — always report disconnected.
+  handler(SOCKET_DISABLED ? false : Boolean(socket?.connected));
   return () => statusHandlers.delete(handler);
 }
 
@@ -129,7 +146,7 @@ export function onConnectionChange(handler) {
  * `connect` handler above rejoins them all.
  */
 export function refreshSocketAuth() {
-  if (!socket) return;
+  if (!socket || SOCKET_DISABLED) return;
   socket.auth = { token: getToken() };
   socket.disconnect().connect();
 }

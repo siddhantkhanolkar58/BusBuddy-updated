@@ -8,8 +8,21 @@
  *  - a lost connection is reported as `offline: true` instead of a generic
  *    error, because for a commuter at a stop that is the common case and the UI
  *    has to say "you are offline", never show an old position as current.
+ *
+ * Static-host fallback:
+ *  - When VITE_API_URL is not set, the app is on a static host (Vercel /
+ *    Firebase Hosting) with no Express backend.  Any /api request will either
+ *    return the HTML SPA shell (Firebase) or a 404 JSON error (Vercel).
+ *    Both cases are detected and routed to the Firestore engine instead.
  */
 const BASE = (import.meta.env?.VITE_API_URL ?? '').replace(/\/$/, '');
+
+/**
+ * True when no backend URL is configured — i.e. this is a pure static
+ * deployment.  We skip the fetch entirely and go straight to Firestore,
+ * avoiding the 404/HTML round-trip and the console noise it produces.
+ */
+const STATIC_ONLY = !import.meta.env?.VITE_API_URL;
 const TOKEN_KEY = 'sptos.token';
 
 export class ApiError extends Error {
@@ -58,6 +71,12 @@ async function request(method, path, { body, params, signal, raw = false } = {})
   if (token) headers.authorization = `Bearer ${token}`;
   if (body !== undefined) headers['content-type'] = 'application/json';
 
+  // Static-only deployment: skip the network round-trip entirely and use Firestore.
+  if (STATIC_ONLY) {
+    const { handleMockRequest } = await import('./firestoreDb.js');
+    return handleMockRequest(method, path, body, params, token);
+  }
+
   let response;
   let useFallback = false;
 
@@ -70,8 +89,12 @@ async function request(method, path, { body, params, signal, raw = false } = {})
     });
 
     const contentType = response.headers.get('content-type') || '';
-    // On static hosts like Firebase Hosting, unhandled API requests return the HTML SPA shell:
+    // Firebase Hosting returns the HTML SPA shell for unknown /api paths:
     if (contentType.includes('text/html')) {
+      useFallback = true;
+    }
+    // Vercel returns a JSON 404 for unknown paths (no Vercel Functions defined):
+    if (response.status === 404 && path.startsWith('/api/')) {
       useFallback = true;
     }
   } catch (err) {
